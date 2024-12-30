@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel Formula Explainer</title>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+
+<body>
+    <div class="formula-card">
+        <h1>Excel Formula Explainer</h1>
+
+        <div id="serverStatus" class="status">Checking server status...</div>
+
+        <div class="description-box">
+            <p>Enter an Excel function or formula below for a detailed explanation:</p>
+            <input
+                type="text"
+                id="userQuery"
+                placeholder="Enter an Excel function (e.g., VLOOKUP, INDEX, MATCH, IF)"
+                autocomplete="off"
+                spellcheck="false"
+            >
+            <button onclick="processQuery()" id="submitButton">Explain Formula</button>
+        </div>
+
+        <div id="responseContainer"></div>
+    </div>
+
+    <script>
+        // Function to check if the Flask server is running
+        async function checkServer() {
+            const statusDiv = document.getElementById('serverStatus');
+            const submitButton = document.getElementById('submitButton');
+            
+            try {
+                const response = await fetch('http://localhost:5000/');
+                if (response.ok) {
+                    statusDiv.innerHTML = 'Server is running';
+                    statusDiv.style.display = 'none';
+                    submitButton.disabled = false;
+                } else {
+                    throw new Error('Server response not OK');
+                }
+            } catch (error) {
+                statusDiv.innerHTML = 'Error: Server not running. Please start the Flask server.';
+                statusDiv.className = 'error';
+                submitButton.disabled = true;
+            }
+        }
+
+        // Function to handle the user's query
+        // Previous code remains the same until the processQuery function...
+
+        async function processQuery() {
+            const query = document.getElementById("userQuery").value;
+            const responseContainer = document.getElementById("responseContainer");
+            const submitButton = document.getElementById('submitButton');
+            
+            if (!query.trim()) {
+                responseContainer.innerHTML = '<div class="error">Please enter an Excel function or formula</div>';
+                return;
+            }
+
+            try {
+                submitButton.disabled = true;
+                responseContainer.innerHTML = '<div class="status">Analyzing formula...</div>';
+
+                // Function to make API call for each section
+                async function getSection(prompt) {
+                    const response = await fetch('http://localhost:5000/process-query', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
+                        },
+                        body: JSON.stringify({ query: prompt })
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => null);
+                        throw new Error(errorData?.error || `Server error: ${response.status}`);
+                    }
+
+                    return await response.json();
+                }
+
+                // Make parallel API calls for each section
+                const [descriptionData, syntaxData, exampleData, parametersData, recommendationsData] = await Promise.all([
+                    // Description query
+                    getSection(`Provide a brief description (within 20 words) of the Excel ${query} function.
+                    If this is not a valid Excel function, respond with "Not a valid Excel function."`),
+                    
+                    // Syntax query
+                    getSection(`What is the syntax of the Excel ${query} function? 
+                    Show only the syntax in this format: =FUNCTION(parameter1, [parameter2], and so on)
+                    If this is not a valid Excel function, respond with "N/A"`),
+                    
+                    // Example query
+                    getSection(`Provide a practical example of the Excel ${query} function.
+                    Format is Formula: =FUNCTION(parameter1, [parameter2], and so on), don't add with the details of the example
+                    If this is not a valid Excel function, respond with "N/A"`),
+                    
+                    // Parameters query
+                    getSection(`List parameters of Excel ${query} function.
+                    Format exactly as:
+                    1. lookup_value - Description
+                    2. table_array - Description
+                    3. col_index_num - Description
+                    4. range_lookup - Description
+                    and so on
+                    If not valid Excel function, respond "N/A"`)
+                    
+                    // Related functions query
+                    getSection(`List 3 Excel functions related to ${query} separated by commas.
+                    If this is not a valid Excel function, respond with "N/A"`)
+                ]);
+
+                const exampledetailsData = await getSection(
+                    `Explain step by step how this example syntax works: ${exampleData.response}. Maximum of 50 words
+                    If this is not a valid Excel function, respond with "N/A"`
+                );
+
+
+                // Check if it's not a valid Excel function
+                if (descriptionData.response === "Not a valid Excel function.") {
+                    responseContainer.innerHTML = '<div class="error">Not a valid Excel function</div>';
+                    return;
+                }
+
+                // Build the response HTML
+                let html = '<div class="formula-card">';
+                html += `<h2>${query.toUpperCase()}</h2>`;
+                
+                // Description Section
+                html += '<h2>Description</h2>';
+                html += `<div class="description-box">${descriptionData.response}</div>`;
+                
+                // Syntax Section
+                html += '<h2>Syntax</h2>';
+                html += `<div class="syntax-box">=<span class="function">${query.toUpperCase()}</span>(<span class="param1">lookup_value</span>, <span class="param2">table_array</span>, <span class="param3">col_index_num</span>, [<span class="param4">range_lookup</span>])</div>`;
+
+                // Example Section
+                html += '<h2>Example</h2>';
+                html += `<div class="example-box">${exampleData.response}</div>`;
+                html += `<div class="example-box">${exampledetailsData.response}</div>`;
+
+                // Parameters Section
+                html += '<h2>Parameters</h2>';
+                const parameters = parametersData.response.split('\n');
+                parameters.forEach(param => {
+                    if (param.trim()) {
+                        const paramMatches = param.match(/Parameter(\d+)\s+(.+?)\s*-\s*(.+)/);
+                        if (paramMatches) {
+                            const [_, number, name, description] = paramMatches;
+                            const paramNumber = parseInt(number);
+                            const paramName = getParameterTitle(paramNumber);
+                            html += `<div class="parameter">
+                                <h3>${paramName}</h3>
+                                <p><span class="param${paramNumber}">${name}</span> - ${description}</p>
+                            </div>`;
+                        }
+                    }
+                });
+
+                function getParameterTitle(number) {
+                    const titles = {
+                        1: 'lookup_value',
+                        2: 'table_array',
+                        3: 'col_index_num',
+                        4: 'range_lookup'
+                    };
+                    return titles[number] || `Parameter${number}`;
+                }
+                
+                                
+                // Related Functions Section
+                if (recommendationsData.response !== "N/A") {
+                    html += '<div class="related-functions">';
+                    html += '<h2>Related Functions</h2>';
+                    html += '<ul>';
+                    recommendationsData.response.split(',').forEach(func => {
+                        html += `<li>${func.trim()}</li>`;
+                    });
+                    html += '</ul></div>';
+                }
+                
+                html += '</div>';
+                responseContainer.innerHTML = html;
+            } catch (error) {
+                responseContainer.innerHTML = `<div class="error">
+                    ${error.message === 'Failed to fetch'
+                        ? 'Error: Could not connect to server. Please ensure the Flask server is running.'
+                        : `Error: ${error.message}`}
+                </div>`;
+                console.error('Error:', error);
+            } finally {
+                submitButton.disabled = false;
+            }
+        }
+
+// Rest of the code remains the same...
+
+        // Handle Enter key press
+        document.getElementById("userQuery").addEventListener("keypress", function(event) {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                processQuery();
+            }
+        });
+
+        // Initial server check and periodic checking
+        checkServer();
+        setInterval(checkServer, 5000);
+    </script>
+</body>
+</html>
